@@ -32,7 +32,10 @@ int read_png(const char* filename, unsigned char** image, unsigned* height, unsi
     FILE* infile;
     infile = fopen(filename, "rb");
 
-    fread(sig, 1, 8, infile);
+    if (fread(sig, 1, 8, infile) <= 0) {
+        printf("read fail");
+        exit(1);
+    }
     if (!png_check_sig(sig, 8)) return 1; /* bad signature */
 
     png_structp png_ptr;
@@ -97,44 +100,46 @@ void write_png(const char* filename, png_bytep image, const unsigned height, con
 }
 
 void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, unsigned channels) {
-    int x, y, i, v, u;
+    int x, y, v, u;
     int R, G, B;
-    double val[MASK_N * 3] = {0.0};
-    int adjustX, adjustY, xBound, yBound;
-    for (y = 0; y < height; ++y) {
-        for (x = 0; x < width; ++x) {
-            for (i = 0; i < MASK_N; ++i) {
-                adjustX = (MASK_X % 2) ? 1 : 0;
-                adjustY = (MASK_Y % 2) ? 1 : 0;
-                xBound = MASK_X / 2;
-                yBound = MASK_Y / 2;
+    int val[MASK_N * 3] = {0};
+    int adjustX = (MASK_X % 2);
+    int adjustY = (MASK_Y % 2);
+    int xBound = MASK_X >> 1;
+    int yBound = MASK_Y >> 1;
 
-                val[i * 3 + 2] = 0.0;
-                val[i * 3 + 1] = 0.0;
-                val[i * 3] = 0.0;
+    for (y = yBound; y < height+yBound; ++y) {
+        for (x = xBound; x < width+xBound; ++x) {
+            val[0] = 0;
+            val[1] = 0;
+            val[2] = 0;
+            val[3] = 0;
+            val[4] = 0;
+            val[5] = 0;
+            
+            for (v = -yBound; v < yBound + adjustY; ++v) {
+                for (u = -xBound; u < xBound + adjustX; ++u) {
+                    R = s[channels * (width * (y + v) + (x + u)) + 2];
+                    G = s[channels * (width * (y + v) + (x + u)) + 1];
+                    B = s[channels * (width * (y + v) + (x + u)) + 0];
 
-                for (v = -yBound; v < yBound + adjustY; ++v) {
-                    for (u = -xBound; u < xBound + adjustX; ++u) {
-                        if ((x + u) >= 0 && (x + u) < width && y + v >= 0 && y + v < height) {
-                            R = s[channels * (width * (y + v) + (x + u)) + 2];
-                            G = s[channels * (width * (y + v) + (x + u)) + 1];
-                            B = s[channels * (width * (y + v) + (x + u)) + 0];
-                            val[i * 3 + 2] += R * mask[i][u + xBound][v + yBound];
-                            val[i * 3 + 1] += G * mask[i][u + xBound][v + yBound];
-                            val[i * 3 + 0] += B * mask[i][u + xBound][v + yBound];
-                        }
-                    }
+                    val[2] += R * mask[0][u + xBound][v + yBound];
+                    val[1] += G * mask[0][u + xBound][v + yBound];
+                    val[0] += B * mask[0][u + xBound][v + yBound];
+
+                    val[5] += R * mask[1][u + xBound][v + yBound];
+                    val[4] += G * mask[1][u + xBound][v + yBound];
+                    val[3] += B * mask[1][u + xBound][v + yBound];
                 }
             }
 
-            double totalR = 0.0;
-            double totalG = 0.0;
-            double totalB = 0.0;
-            for (i = 0; i < MASK_N; ++i) {
-                totalR += val[i * 3 + 2] * val[i * 3 + 2];
-                totalG += val[i * 3 + 1] * val[i * 3 + 1];
-                totalB += val[i * 3 + 0] * val[i * 3 + 0];
-            }
+            float totalR = 0.0;
+            float totalG = 0.0;
+            float totalB = 0.0;
+            
+            totalR += val[2] * val[2] + val[5] * val[5];
+            totalG += val[1] * val[1] + val[4] * val[4];
+            totalB += val[0] * val[0] + val[3] * val[3];
 
             totalR = sqrt(totalR) / SCALE;
             totalG = sqrt(totalG) / SCALE;
@@ -150,22 +155,43 @@ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, 
 }
 
 int main(int argc, char** argv) {
+    printf("main start");
     assert(argc == 3);
 
     unsigned height, width, channels;
     unsigned char* src_img = NULL;
 
+    printf("before read");
+
     read_png(argv[1], &src_img, &height, &width, &channels);
     assert(channels == 3);
 
+    printf("read success");
+
     unsigned char* dst_img =
         (unsigned char*)malloc(height * width * channels * sizeof(unsigned char));
+    
+    unsigned char* mod_src_img =
+        (unsigned char*)calloc((height+5) * (width+5) * channels, sizeof(unsigned char));
 
-    sobel(src_img, dst_img, height, width, channels);
+    int num = width * channels * sizeof(unsigned char);
+    for(int i=0; i<height; ++i){
+        memcpy(mod_src_img + (i+2) * (width+5) * channels + 2, src_img + i * width * channels, num);
+    }
+
+    printf("memcpy success");
+
+    sobel(mod_src_img, dst_img, height, width, channels);
+
+    printf("sobel success");
+
     write_png(argv[2], dst_img, height, width, channels);
+
+    printf("write success");
 
     free(src_img);
     free(dst_img);
+    free(mod_src_img);
 
     return 0;
 }
