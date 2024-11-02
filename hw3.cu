@@ -147,26 +147,26 @@ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, 
             const unsigned char cR = (totalR > 255.0) ? 255 : totalR;
             const unsigned char cG = (totalG > 255.0) ? 255 : totalG;
             const unsigned char cB = (totalB > 255.0) ? 255 : totalB;
-            t[channels * (width * y + x) + 2] = cR;
-            t[channels * (width * y + x) + 1] = cG;
-            t[channels * (width * y + x) + 0] = cB;
+            t[channels * (width * (y-yBound) + (x-xBound)) + 2] = cR;
+            t[channels * (width * (y-yBound) + (x-xBound)) + 1] = cG;
+            t[channels * (width * (y-yBound) + (x-xBound)) + 0] = cB;
         }
     }
 }
 
 int main(int argc, char** argv) {
-    printf("main start");
+    fprintf(stderr, "main start\n");
     assert(argc == 3);
 
     unsigned height, width, channels;
     unsigned char* src_img = NULL;
 
-    printf("before read");
+    fprintf(stderr, "before read\n");
 
     read_png(argv[1], &src_img, &height, &width, &channels);
     assert(channels == 3);
 
-    printf("read success");
+    fprintf(stderr, "read success\n");
 
     unsigned char* dst_img =
         (unsigned char*)malloc(height * width * channels * sizeof(unsigned char));
@@ -176,22 +176,25 @@ int main(int argc, char** argv) {
 
     int num = width * channels * sizeof(unsigned char);
     for(int i=0; i<height; ++i){
-        memcpy(mod_src_img + (i+2) * (width+5) * channels + 2, src_img + i * width * channels, num);
+        memcpy(mod_src_img + channels * ((i+2) * (width+5) + 2), src_img + channels * i * width, num);
     }
 
-    printf("memcpy success");
+    fprintf(stderr, "memcpy success\n");
 
     sobel(mod_src_img, dst_img, height, width, channels);
 
-    printf("sobel success");
+    fprintf(stderr, "sobel success\n");
 
     write_png(argv[2], dst_img, height, width, channels);
 
-    printf("write success");
+    fprintf(stderr, "write success\n");
 
-    free(src_img);
+    // free(src_img);
+    // fprintf(stderr, "free src_img\n");
     free(dst_img);
+    fprintf(stderr, "free dst_img\n");
     free(mod_src_img);
+    fprintf(stderr, "free mod_src_img\n");
 
     return 0;
 }
