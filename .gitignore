@@ -3,4 +3,4 @@
 /samples/2.png
 /samples/2.out.png
 .vscode
-*.png
+outputs/*

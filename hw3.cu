@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <chrono>
 
 #define MASK_N 2
 #define MASK_X 5
@@ -12,7 +13,7 @@
 #define SCALE 8
 
 // clang-format off
-int mask[MASK_N][MASK_X][MASK_Y] = {
+__constant__ int mask[MASK_N][MASK_X][MASK_Y] = {
     {{ -1, -4, -6, -4, -1},
      { -2, -8,-12, -8, -2},
      {  0,  0,  0,  0,  0},
@@ -99,102 +100,150 @@ void write_png(const char* filename, png_bytep image, const unsigned height, con
     fclose(fp);
 }
 
-void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, unsigned channels) {
+// int index = threadIdx.x + blockIdx.x * blockDim.x;
+// int stride = blockDim.x * gridDim.x;
+// cudaMemPrefetchAsync(a, size, deviceId);
+// cudaMemPrefetchAsync(c, size, cudaCpuDeviceId);
+
+__global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, unsigned channels) {
     int x, y, v, u;
     int R, G, B;
     int val[MASK_N * 3] = {0};
-    int adjustX = (MASK_X % 2);
-    int adjustY = (MASK_Y % 2);
-    int xBound = MASK_X >> 1;
-    int yBound = MASK_Y >> 1;
+    int adjustX = 1;
+    int adjustY = 1;
+    int xBound = 2;
+    int yBound = 2;
+    int total_pixel = width * height;
 
-    for (y = yBound; y < height+yBound; ++y) {
-        for (x = xBound; x < width+xBound; ++x) {
-            val[0] = 0;
-            val[1] = 0;
-            val[2] = 0;
-            val[3] = 0;
-            val[4] = 0;
-            val[5] = 0;
-            
-            for (v = -yBound; v < yBound + adjustY; ++v) {
-                for (u = -xBound; u < xBound + adjustX; ++u) {
-                    R = s[channels * (width * (y + v) + (x + u)) + 2];
-                    G = s[channels * (width * (y + v) + (x + u)) + 1];
-                    B = s[channels * (width * (y + v) + (x + u)) + 0];
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;    
 
-                    val[2] += R * mask[0][u + xBound][v + yBound];
-                    val[1] += G * mask[0][u + xBound][v + yBound];
-                    val[0] += B * mask[0][u + xBound][v + yBound];
+    while(index < total_pixel){
+        y = index / width;
+        x = index % width;
 
-                    val[5] += R * mask[1][u + xBound][v + yBound];
-                    val[4] += G * mask[1][u + xBound][v + yBound];
-                    val[3] += B * mask[1][u + xBound][v + yBound];
-                }
+        val[0] = 0;
+        val[1] = 0;
+        val[2] = 0;
+        val[3] = 0;
+        val[4] = 0;
+        val[5] = 0;
+        
+        for (v = -yBound; v < yBound + adjustY; ++v) {
+            for (u = -xBound; u < xBound + adjustX; ++u) {
+                R = s[channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 2];
+                G = s[channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 1];
+                B = s[channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 0];
+
+                val[2] += R * mask[0][u + xBound][v + yBound];
+                val[1] += G * mask[0][u + xBound][v + yBound];
+                val[0] += B * mask[0][u + xBound][v + yBound];
+
+                val[5] += R * mask[1][u + xBound][v + yBound];
+                val[4] += G * mask[1][u + xBound][v + yBound];
+                val[3] += B * mask[1][u + xBound][v + yBound];
             }
-
-            float totalR = 0.0;
-            float totalG = 0.0;
-            float totalB = 0.0;
-            
-            totalR += val[2] * val[2] + val[5] * val[5];
-            totalG += val[1] * val[1] + val[4] * val[4];
-            totalB += val[0] * val[0] + val[3] * val[3];
-
-            totalR = sqrt(totalR) / SCALE;
-            totalG = sqrt(totalG) / SCALE;
-            totalB = sqrt(totalB) / SCALE;
-            const unsigned char cR = (totalR > 255.0) ? 255 : totalR;
-            const unsigned char cG = (totalG > 255.0) ? 255 : totalG;
-            const unsigned char cB = (totalB > 255.0) ? 255 : totalB;
-            t[channels * (width * (y-yBound) + (x-xBound)) + 2] = cR;
-            t[channels * (width * (y-yBound) + (x-xBound)) + 1] = cG;
-            t[channels * (width * (y-yBound) + (x-xBound)) + 0] = cB;
         }
+
+        float totalR = 0.0;
+        float totalG = 0.0;
+        float totalB = 0.0;
+        
+        totalR += val[2] * val[2] + val[5] * val[5];
+        totalG += val[1] * val[1] + val[4] * val[4];
+        totalB += val[0] * val[0] + val[3] * val[3];
+
+        totalR = sqrt(totalR) / SCALE;
+        totalG = sqrt(totalG) / SCALE;
+        totalB = sqrt(totalB) / SCALE;
+        const unsigned char cR = (totalR > 255.0) ? 255 : totalR;
+        const unsigned char cG = (totalG > 255.0) ? 255 : totalG;
+        const unsigned char cB = (totalB > 255.0) ? 255 : totalB;
+        t[channels * (width * y + x) + 2] = cR;
+        t[channels * (width * y + x) + 1] = cG;
+        t[channels * (width * y + x) + 0] = cB;
+
+        index += stride;
     }
 }
 
 int main(int argc, char** argv) {
-    fprintf(stderr, "main start\n");
     assert(argc == 3);
+
+    auto start_all = std::chrono::high_resolution_clock::now();
+
+    int deviceId;
+    int numberOfSMs;
+
+    cudaGetDevice(&deviceId);
+    cudaDeviceGetAttribute(&numberOfSMs, cudaDevAttrMultiProcessorCount, deviceId);
+
+    size_t threadsPerBlock;
+    size_t numberOfBlocks;
+    threadsPerBlock = 256;
+    numberOfBlocks = 32 * numberOfSMs;
 
     unsigned height, width, channels;
     unsigned char* src_img = NULL;
 
-    fprintf(stderr, "before read\n");
-
     read_png(argv[1], &src_img, &height, &width, &channels);
     assert(channels == 3);
 
-    fprintf(stderr, "read success\n");
+    unsigned char* dst_img;
+    cudaMallocManaged(&dst_img, height * width * channels * sizeof(unsigned char));
 
-    unsigned char* dst_img =
-        (unsigned char*)malloc(height * width * channels * sizeof(unsigned char));
-    
-    unsigned char* mod_src_img =
-        (unsigned char*)calloc((height+5) * (width+5) * channels, sizeof(unsigned char));
+    auto start_copy = std::chrono::high_resolution_clock::now();
+
+    unsigned char* mod_src_img;
+    cudaMallocManaged(&mod_src_img, (height+5) * (width+5) * channels * sizeof(unsigned char));
+
+    // memset(mod_src_img, 0, (height+5) * (width+5) * channels * sizeof(unsigned char));
+    for(int i=0; i<height+5; ++i){
+        if(i < 2 || i >= height + 2){
+            memset(mod_src_img, 0, (width+5) * channels);
+        }
+        else{
+            for(int j=0; j<3; ++j){
+                mod_src_img[channels * (i * (width+5) + 0) + j] = 0;
+                mod_src_img[channels * (i * (width+5) + 1) + j] = 0;
+                mod_src_img[channels * (i * (width+5) + width+2) + j] = 0;
+                mod_src_img[channels * (i * (width+5) + width+3) + j] = 0;
+                mod_src_img[channels * (i * (width+5) + width+4) + j] = 0;
+            }
+        }
+    }
 
     int num = width * channels * sizeof(unsigned char);
     for(int i=0; i<height; ++i){
         memcpy(mod_src_img + channels * ((i+2) * (width+5) + 2), src_img + channels * i * width, num);
     }
 
-    fprintf(stderr, "memcpy success\n");
+    cudaMemPrefetchAsync(mod_src_img, (height+5) * (width+5) * channels * sizeof(unsigned char), deviceId);
 
-    sobel(mod_src_img, dst_img, height, width, channels);
+    auto end_copy = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed_seconds = end_copy - start_copy;
+    std::cout << "Image Copy Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
 
-    fprintf(stderr, "sobel success\n");
+    auto start_sobel = std::chrono::high_resolution_clock::now();
+    sobel<<<numberOfBlocks, threadsPerBlock>>>(mod_src_img, dst_img, height, width, channels);
+    cudaDeviceSynchronize();
+
+    auto end_sobel = std::chrono::high_resolution_clock::now();
+    elapsed_seconds = end_sobel - start_sobel;
+    std::cout << "Sobel Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
+
+    cudaMemPrefetchAsync(dst_img, height * width * channels * sizeof(unsigned char), cudaCpuDeviceId);
 
     write_png(argv[2], dst_img, height, width, channels);
 
-    fprintf(stderr, "write success\n");
-
     // free(src_img);
     // fprintf(stderr, "free src_img\n");
-    free(dst_img);
-    fprintf(stderr, "free dst_img\n");
-    free(mod_src_img);
-    fprintf(stderr, "free mod_src_img\n");
+    cudaFree(dst_img);
+    cudaFree(mod_src_img);
+
+    auto end_all = std::chrono::high_resolution_clock::now();
+    elapsed_seconds = end_sobel - start_sobel;
+    std::cout << "Total Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
 
     return 0;
 }
