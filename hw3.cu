@@ -106,30 +106,36 @@ void write_png(const char* filename, png_bytep image, const unsigned height, con
 // cudaMemPrefetchAsync(c, size, cudaCpuDeviceId);
 
 __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, unsigned channels, int TILE_WIDTH) {
-    // extern __shared__ unsigned char sharedMem[][TILE_WIDTH * channels];
-    extern __shared__ unsigned char sharedMem[];
+    
+    //extern __shared__ unsigned char sharedMem[];
 
-    int vv, uu, v, u;
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        printf("In kernel.\n");
+    }
+    return;
+    /*
+    int vv, uu, v, u, i;
     int R, G, B;
     int val[MASK_N * 3] = {0};
     int cur_mem_row = 0;
     int end_mem_row = 4;
 
-    int rows_per_block = height / 1280 + 1;
-    int numOfChunk = (width+5) / 6400 + 1;
-    int chunk_index = blockIdx.x % numOfChunk;
+    int numOfRowChunk = (height + 1279) / 1280;
+    int numOfColChunk = (width + 6404) / 6400;
+    int rows_per_block = (height + numOfRowChunk - 1) / numOfRowChunk;
+    int chunk_index = blockIdx.x % numOfColChunk;
+
     int start_column = chunk_index * TILE_WIDTH;
     int end_column = start_column + TILE_WIDTH > (width+5) ? width+5 : start_column + TILE_WIDTH;
 
-    int start_row = blockIdx.x / numOfChunk * rows_per_block;
-    int end_row = start_row + rows_per_block;
-    if(end_row > height)
-        end_row = height;
+    int start_row = blockIdx.x / numOfColChunk * rows_per_block;
+    int end_row = start_row + rows_per_block > height ? height : start_row + rows_per_block;
+
+    int len = end_column - start_column + 1;
+    int stride = blockDim.x;
 
     if (start_row < end_row){
-        int len = end_column - start_column + 1;
-        int stride = blockDim.x;
-        for(int i=0; i<len; i+=stride){
+        for(i=threadIdx.x; i<len; i+=stride){
             for(int j=0; j<5; ++j){
                 sharedMem[channels * (j * TILE_WIDTH + i) + 0] = s[channels * ((start_row+j)*(width+5) + chunk_index*TILE_WIDTH + i) + 0];
                 sharedMem[channels * (j * TILE_WIDTH + i) + 1] = s[channels * ((start_row+j)*(width+5) + chunk_index*TILE_WIDTH + i) + 1];
@@ -138,13 +144,14 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
         }
     }
 
-    __syncthreads();
-
-    int len = end_column - start_column + 1;
-    int stride = blockDim.x;    
+    __syncthreads();      
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        printf("Shared Memory First Load: R=%d, G=%d, B=%d\n", 
+            sharedMem[0], sharedMem[1], sharedMem[2]);
+    }
 
     while(start_row < end_row){
-        for(int index=0; index<len; index+=stride){
+        for(int index=threadIdx.x; index<len; index+=stride){
             val[0] = 0;
             val[1] = 0;
             val[2] = 0;
@@ -154,8 +161,8 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
 
             for (v = 0; v < 5; ++v) {
                 for (u = 0; u < 5; ++u) {
-                    vv = (v + cur_mem_row) % 5;
-                    uu = (u + cur_mem_row) % 5;
+                    vv = (v + cur_mem_row + index) % 5;
+                    uu = (u + cur_mem_row + index) % 5;
 
                     R = sharedMem[channels * ((TILE_WIDTH) * (vv) + (uu)) + 2];
                     G = sharedMem[channels * ((TILE_WIDTH) * (vv) + (uu)) + 1];
@@ -187,22 +194,22 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
             const unsigned char cB = (totalB > 255.0) ? 255 : totalB;
             t[channels * (width * start_row + chunk_index * TILE_WIDTH + index) + 2] = cR;
             t[channels * (width * start_row + chunk_index * TILE_WIDTH + index) + 1] = cG;
-            t[channels * (width * start_row + chunk_index * TILE_WIDTH + index) + 0] = cB;
-
-            start_row++;
-            if(start_row < end_row){
-                cur_mem_row = (cur_mem_row + 1) % 5;
-                end_mem_row = (end_mem_row + 1) % 5;
-                for(int i=0; i<len; i+=stride){
-                    sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 0] = s[channels * ((start_row+2)*(width+5) + chunk_index*TILE_WIDTH + i) + 0];
-                    sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 1] = s[channels * ((start_row+2)*(width+5) + chunk_index*TILE_WIDTH + i) + 1];
-                    sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 2] = s[channels * ((start_row+2)*(width+5) + chunk_index*TILE_WIDTH + i) + 2];
-                }
-
-                __syncthreads();
-            }
+            t[channels * (width * start_row + chunk_index * TILE_WIDTH + index) + 0] = cB; 
         }
-    }
+
+        start_row++;
+        if(start_row < end_row){
+            cur_mem_row = (cur_mem_row + 1) % 5;
+            end_mem_row = (end_mem_row + 1) % 5;
+            for(int i=threadIdx.x; i<len; i+=stride){
+                sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 0] = s[channels * ((start_row+4)*(width+5) + chunk_index*TILE_WIDTH + i) + 0];
+                sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 1] = s[channels * ((start_row+4)*(width+5) + chunk_index*TILE_WIDTH + i) + 1];
+                sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 2] = s[channels * ((start_row+4)*(width+5) + chunk_index*TILE_WIDTH + i) + 2];
+            }
+
+            __syncthreads();
+        }
+    } */
 }
 
 int main(int argc, char** argv) {
@@ -210,6 +217,7 @@ int main(int argc, char** argv) {
 
     auto start_all = std::chrono::high_resolution_clock::now();
 
+    cudaError_t err;
     int deviceId;
     int numberOfSMs;
 
@@ -264,11 +272,15 @@ int main(int argc, char** argv) {
 
     auto start_sobel = std::chrono::high_resolution_clock::now();
     
-    int numOfColumn = (width + 5) / 6400 + 1;
+    int numOfColumn = (width + 5 + 6400 - 1) / 6400;
     int columnWidth = (width + 5 + numOfColumn - 1) / numOfColumn;
     int sharedMemSize = 5 * columnWidth * channels * sizeof(unsigned char);
+    fprintf(stderr, "shared memory size: %d\n", sharedMemSize);
+
     sobel<<<numberOfBlocks, threadsPerBlock, sharedMemSize>>>(mod_src_img, dst_img, height, width, channels, columnWidth);
     cudaDeviceSynchronize();
+    err = cudaGetLastError();
+    fprintf(stderr, "CUDA error: %s\n", cudaGetErrorString(err));
 
     auto end_sobel = std::chrono::high_resolution_clock::now();
     elapsed_seconds = end_sobel - start_sobel;
