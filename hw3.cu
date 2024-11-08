@@ -106,16 +106,12 @@ void write_png(const char* filename, png_bytep image, const unsigned height, con
 // cudaMemPrefetchAsync(c, size, cudaCpuDeviceId);
 
 __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, unsigned channels, int TILE_WIDTH) {
-    extern __shared__ unsigned char sharedMem[][TILE_WIDTH * channels];
+    // extern __shared__ unsigned char sharedMem[][TILE_WIDTH * channels];
+    extern __shared__ unsigned char sharedMem[];
 
     int vv, uu, v, u;
     int R, G, B;
     int val[MASK_N * 3] = {0};
-    int adjustX = 1;
-    int adjustY = 1;
-    int xBound = 2;
-    int yBound = 2;
-    int total_pixel = width * height;
     int cur_mem_row = 0;
     int end_mem_row = 4;
 
@@ -135,9 +131,9 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
         int stride = blockDim.x;
         for(int i=0; i<len; i+=stride){
             for(int j=0; j<5; ++j){
-                sharedMem[j][channels * i + 0] = s[channels * ((start_row+j)*(width+5) + chunk_index*TILE_WIDTH + i) + 0];
-                sharedMem[j][channels * i + 1] = s[channels * ((start_row+j)*(width+5) + chunk_index*TILE_WIDTH + i) + 1];
-                sharedMem[j][channels * i + 2] = s[channels * ((start_row+j)*(width+5) + chunk_index*TILE_WIDTH + i) + 2];
+                sharedMem[channels * (j * TILE_WIDTH + i) + 0] = s[channels * ((start_row+j)*(width+5) + chunk_index*TILE_WIDTH + i) + 0];
+                sharedMem[channels * (j * TILE_WIDTH + i) + 1] = s[channels * ((start_row+j)*(width+5) + chunk_index*TILE_WIDTH + i) + 1];
+                sharedMem[channels * (j * TILE_WIDTH + i) + 2] = s[channels * ((start_row+j)*(width+5) + chunk_index*TILE_WIDTH + i) + 2];
             }
         }
     }
@@ -155,22 +151,6 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
             val[3] = 0;
             val[4] = 0;
             val[5] = 0;
-            
-            for (v = -yBound; v < yBound + adjustY; ++v) {
-                for (u = -xBound; u < xBound + adjustX; ++u) {
-                    R = s[channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 2];
-                    G = s[channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 1];
-                    B = s[channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 0];
-
-                    val[2] += R * mask[0][u + xBound][v + yBound];
-                    val[1] += G * mask[0][u + xBound][v + yBound];
-                    val[0] += B * mask[0][u + xBound][v + yBound];
-
-                    val[5] += R * mask[1][u + xBound][v + yBound];
-                    val[4] += G * mask[1][u + xBound][v + yBound];
-                    val[3] += B * mask[1][u + xBound][v + yBound];
-                }
-            }
 
             for (v = 0; v < 5; ++v) {
                 for (u = 0; u < 5; ++u) {
@@ -214,9 +194,9 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
                 cur_mem_row = (cur_mem_row + 1) % 5;
                 end_mem_row = (end_mem_row + 1) % 5;
                 for(int i=0; i<len; i+=stride){
-                    sharedMem[end_mem_row][channels * i + 0] = s[channels * ((start_row+2)*(width+5) + chunk_index*TILE_WIDTH + i) + 0];
-                    sharedMem[end_mem_row][channels * i + 1] = s[channels * ((start_row+2)*(width+5) + chunk_index*TILE_WIDTH + i) + 1];
-                    sharedMem[end_mem_row][channels * i + 2] = s[channels * ((start_row+2)*(width+5) + chunk_index*TILE_WIDTH + i) + 2];
+                    sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 0] = s[channels * ((start_row+2)*(width+5) + chunk_index*TILE_WIDTH + i) + 0];
+                    sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 1] = s[channels * ((start_row+2)*(width+5) + chunk_index*TILE_WIDTH + i) + 1];
+                    sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 2] = s[channels * ((start_row+2)*(width+5) + chunk_index*TILE_WIDTH + i) + 2];
                 }
 
                 __syncthreads();
@@ -284,7 +264,6 @@ int main(int argc, char** argv) {
 
     auto start_sobel = std::chrono::high_resolution_clock::now();
     
-    int rows_per_block = height / 1280 + 1;
     int numOfColumn = (width + 5) / 6400 + 1;
     int columnWidth = (width + 5 + numOfColumn - 1) / numOfColumn;
     int sharedMemSize = 5 * columnWidth * channels * sizeof(unsigned char);
