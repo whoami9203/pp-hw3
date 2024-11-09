@@ -105,110 +105,68 @@ void write_png(const char* filename, png_bytep image, const unsigned height, con
 // cudaMemPrefetchAsync(a, size, deviceId);
 // cudaMemPrefetchAsync(c, size, cudaCpuDeviceId);
 
-__global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, unsigned channels, int TILE_WIDTH, int numOfColumn) {
-    
-    extern __shared__ unsigned char sharedMem[];
-    
-    int vv, uu, v, u, i;
+__global__ void sobel(cudaTextureObject_t texRef, unsigned char* t, unsigned height, unsigned width, unsigned channels) {
+    int x, y, v, u;
     int R, G, B;
     int val[MASK_N * 3] = {0};
-    int cur_mem_row = 0;
-    int end_mem_row = 4;
+    int adjustX = 1;
+    int adjustY = 1;
+    int xBound = 2;
+    int yBound = 2;
+    int total_pixel = width * height;
 
-    int numOfRowChunk = (80 + numOfColumn - 1) / numOfColumn;
-    int numOfColChunk = numOfColumn;
-    int rows_per_block = (height + numOfRowChunk - 1) / numOfRowChunk;
-    int chunk_index = blockIdx.x % numOfColChunk;
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;    
 
-    int start_column = chunk_index * TILE_WIDTH;
-    int end_column = start_column + TILE_WIDTH > (width+5) ? width+5 : start_column + TILE_WIDTH;
+    int pixel = 
 
-    int start_row = blockIdx.x / numOfColChunk * rows_per_block;
-    int end_row = start_row + rows_per_block > height ? height : start_row + rows_per_block;
+    while(index < total_pixel){
+        y = index / width;
+        x = index % width;
 
-    int len = end_column - start_column + 1;
-    int stride = blockDim.x;
+        val[0] = 0;
+        val[1] = 0;
+        val[2] = 0;
+        val[3] = 0;
+        val[4] = 0;
+        val[5] = 0;
+        
+        for (v = -yBound; v < yBound + adjustY; ++v) {
+            for (u = -xBound; u < xBound + adjustX; ++u) {
+                R = tex1D<unsigned char>(texRef, channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 2);
+                G = tex1D<unsigned char>(texRef, channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 2);
+                B = tex1D<unsigned char>(texRef, channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 2);
 
-    // if (threadIdx.x == 0 && blockIdx.x > 70){
-    //     printf("block ID: %d, start_row: %d, end_row: %d\n", blockIdx.x, start_row, end_row);
-    // }
+                val[2] += R * mask[0][u + xBound][v + yBound];
+                val[1] += G * mask[0][u + xBound][v + yBound];
+                val[0] += B * mask[0][u + xBound][v + yBound];
 
-    // if (threadIdx.x == 0 && start_row > 3000){
-    //     printf("start_row: %d, end_row: %d\n", start_row, end_row);
-    // }
-
-    if (start_row < end_row){
-        for(i=threadIdx.x; i<len; i+=stride){
-            for(int j=0; j<5; ++j){
-                sharedMem[channels * (j * TILE_WIDTH + i) + 0] = s[channels * ((start_row+j)*(width+5) + chunk_index*TILE_WIDTH + i) + 0];
-                sharedMem[channels * (j * TILE_WIDTH + i) + 1] = s[channels * ((start_row+j)*(width+5) + chunk_index*TILE_WIDTH + i) + 1];
-                sharedMem[channels * (j * TILE_WIDTH + i) + 2] = s[channels * ((start_row+j)*(width+5) + chunk_index*TILE_WIDTH + i) + 2];
+                val[5] += R * mask[1][u + xBound][v + yBound];
+                val[4] += G * mask[1][u + xBound][v + yBound];
+                val[3] += B * mask[1][u + xBound][v + yBound];
             }
         }
+
+        float totalR = 0.0;
+        float totalG = 0.0;
+        float totalB = 0.0;
+        
+        totalR += val[2] * val[2] + val[5] * val[5];
+        totalG += val[1] * val[1] + val[4] * val[4];
+        totalB += val[0] * val[0] + val[3] * val[3];
+
+        totalR = sqrt(totalR) / SCALE;
+        totalG = sqrt(totalG) / SCALE;
+        totalB = sqrt(totalB) / SCALE;
+        const unsigned char cR = (totalR > 255.0) ? 255 : totalR;
+        const unsigned char cG = (totalG > 255.0) ? 255 : totalG;
+        const unsigned char cB = (totalB > 255.0) ? 255 : totalB;
+        t[channels * (width * y + x) + 2] = cR;
+        t[channels * (width * y + x) + 1] = cG;
+        t[channels * (width * y + x) + 0] = cB;
+
+        index += stride;
     }
-
-    __syncthreads();      
-
-    while(start_row < end_row){
-        for(int index=threadIdx.x; index<len; index+=stride){
-            val[0] = 0;
-            val[1] = 0;
-            val[2] = 0;
-            val[3] = 0;
-            val[4] = 0;
-            val[5] = 0;
-
-            for (v = 0; v < 5; ++v) {
-                for (u = 0; u < 5; ++u) {
-                    vv = (v + cur_mem_row) % 5;
-                    uu = (u + index);
-
-                    R = sharedMem[channels * ((TILE_WIDTH) * (vv) + (uu)) + 2];
-                    G = sharedMem[channels * ((TILE_WIDTH) * (vv) + (uu)) + 1];
-                    B = sharedMem[channels * ((TILE_WIDTH) * (vv) + (uu)) + 0];
-
-                    val[2] += R * mask[0][u][v];
-                    val[1] += G * mask[0][u][v];
-                    val[0] += B * mask[0][u][v];
-
-                    val[5] += R * mask[1][u][v];
-                    val[4] += G * mask[1][u][v];
-                    val[3] += B * mask[1][u][v];
-                }
-            }
-
-            float totalR = 0.0;
-            float totalG = 0.0;
-            float totalB = 0.0;
-            
-            totalR += val[2] * val[2] + val[5] * val[5];
-            totalG += val[1] * val[1] + val[4] * val[4];
-            totalB += val[0] * val[0] + val[3] * val[3];
-
-            totalR = sqrt(totalR) / SCALE;
-            totalG = sqrt(totalG) / SCALE;
-            totalB = sqrt(totalB) / SCALE;
-            const unsigned char cR = (totalR > 255.0) ? 255 : totalR;
-            const unsigned char cG = (totalG > 255.0) ? 255 : totalG;
-            const unsigned char cB = (totalB > 255.0) ? 255 : totalB;
-            t[channels * (width * start_row + chunk_index * TILE_WIDTH + index) + 2] = cR;
-            t[channels * (width * start_row + chunk_index * TILE_WIDTH + index) + 1] = cG;
-            t[channels * (width * start_row + chunk_index * TILE_WIDTH + index) + 0] = cB; 
-        }
-
-        start_row++;
-        if(start_row < end_row){
-            cur_mem_row = (cur_mem_row + 1) % 5;
-            end_mem_row = (end_mem_row + 1) % 5;
-            for(int i=threadIdx.x; i<len; i+=stride){
-                sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 0] = s[channels * ((start_row+4)*(width+5) + chunk_index*TILE_WIDTH + i) + 0];
-                sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 1] = s[channels * ((start_row+4)*(width+5) + chunk_index*TILE_WIDTH + i) + 1];
-                sharedMem[channels * (end_mem_row * TILE_WIDTH + i) + 2] = s[channels * ((start_row+4)*(width+5) + chunk_index*TILE_WIDTH + i) + 2];
-            }
-
-            __syncthreads();
-        }
-    } 
 }
 
 int main(int argc, char** argv) {
@@ -216,7 +174,6 @@ int main(int argc, char** argv) {
 
     auto start_all = std::chrono::high_resolution_clock::now();
 
-    cudaError_t err;
     int deviceId;
     int numberOfSMs;
 
@@ -226,7 +183,7 @@ int main(int argc, char** argv) {
     size_t threadsPerBlock;
     size_t numberOfBlocks;
     threadsPerBlock = 256;
-    numberOfBlocks = 2 * numberOfSMs;
+    numberOfBlocks = 32 * numberOfSMs;
 
     unsigned height, width, channels;
     unsigned char* src_img = NULL;
@@ -239,50 +196,55 @@ int main(int argc, char** argv) {
 
     auto start_copy = std::chrono::high_resolution_clock::now();
 
-    unsigned char* mod_src_img;
-    cudaMallocManaged(&mod_src_img, (height+5) * (width+5) * channels * sizeof(unsigned char));
+    unsigned char* mod_src_img_h = (unsigned char*)malloc((height + 5) * (width + 5) * channels * sizeof(unsigned char));
+    // cudaMallocManaged(&mod_src_img, (height+5) * (width+5) * channels * sizeof(unsigned char));
 
     // memset(mod_src_img, 0, (height+5) * (width+5) * channels * sizeof(unsigned char));
     for(int i=0; i<height+5; ++i){
         if(i < 2 || i >= height + 2){
-            memset(mod_src_img, 0, (width+5) * channels);
+            memset(mod_src_img_h, 0, (width+5) * channels);
         }
         else{
             for(int j=0; j<3; ++j){
-                mod_src_img[channels * (i * (width+5) + 0) + j] = 0;
-                mod_src_img[channels * (i * (width+5) + 1) + j] = 0;
-                mod_src_img[channels * (i * (width+5) + width+2) + j] = 0;
-                mod_src_img[channels * (i * (width+5) + width+3) + j] = 0;
-                mod_src_img[channels * (i * (width+5) + width+4) + j] = 0;
+                mod_src_img_h[channels * (i * (width+5) + 0) + j] = 0;
+                mod_src_img_h[channels * (i * (width+5) + 1) + j] = 0;
+                mod_src_img_h[channels * (i * (width+5) + width+2) + j] = 0;
+                mod_src_img_h[channels * (i * (width+5) + width+3) + j] = 0;
+                mod_src_img_h[channels * (i * (width+5) + width+4) + j] = 0;
             }
         }
     }
 
     int num = width * channels * sizeof(unsigned char);
     for(int i=0; i<height; ++i){
-        memcpy(mod_src_img + channels * ((i+2) * (width+5) + 2), src_img + channels * i * width, num);
+        memcpy(mod_src_img_h + channels * ((i+2) * (width+5) + 2), src_img + channels * i * width, num);
     }
 
-    cudaMemPrefetchAsync(mod_src_img, (height+5) * (width+5) * channels * sizeof(unsigned char), deviceId);
+    cudaTextureObject_t texRef;
+    cudaArray* cuArray;
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<unsigned char>();
+    cudaMallocArray(&cuArray, &channelDesc, (width+5) * (height+5) * channels);
+
+    cudaMemcpyToArray(cuArray, 0, 0, mod_src_img_h, (width+5) * (height+5) * channels * sizeof(unsigned char), cudaMemcpyHostToDevice);
+
+    cudaResourceDesc resDesc = {};
+    resDesc.resType = cudaResourceTypeArray;
+    resDesc.res.array.array = cuArray;
+
+    cudaTextureDesc texDesc = {};
+    texDesc.readMode = cudaReadModeElementType;
+
+    cudaCreateTextureObject(&texRef, &resDesc, &texDesc, NULL);
+
+    // cudaMemPrefetchAsync(mod_src_img_h, (height+5) * (width+5) * channels * sizeof(unsigned char), deviceId);
 
     auto end_copy = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed_seconds = end_copy - start_copy;
     std::cout << "Image Copy Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
 
     auto start_sobel = std::chrono::high_resolution_clock::now();
-    
-    int numOfColumn = (width + 5 + 3200 - 1) / 3200;
-    int columnWidth = (width + (5 + 1)*numOfColumn - 1) / numOfColumn;
-    int sharedMemSize = 5 * columnWidth * channels * sizeof(unsigned char);
-    fprintf(stderr, "width: %d, num of column: %d\n", width, numOfColumn);
-    fprintf(stderr, "num of blocks: %d, column width: %d\n", numberOfBlocks, columnWidth);
-    fprintf(stderr, "shared memory size: %d\n", sharedMemSize);
-
-
-    sobel<<<numberOfBlocks, threadsPerBlock, sharedMemSize>>>(mod_src_img, dst_img, height, width, channels, columnWidth, numOfColumn);
+    sobel<<<numberOfBlocks, threadsPerBlock>>>(texRef, dst_img, height, width, channels);
     cudaDeviceSynchronize();
-    err = cudaGetLastError();
-    fprintf(stderr, "CUDA error: %s\n", cudaGetErrorString(err));
 
     auto end_sobel = std::chrono::high_resolution_clock::now();
     elapsed_seconds = end_sobel - start_sobel;
@@ -290,21 +252,15 @@ int main(int argc, char** argv) {
 
     cudaMemPrefetchAsync(dst_img, height * width * channels * sizeof(unsigned char), cudaCpuDeviceId);
 
-    auto start_write = std::chrono::high_resolution_clock::now();
-
     write_png(argv[2], dst_img, height, width, channels);
-
-    auto end_write = std::chrono::high_resolution_clock::now();
-    elapsed_seconds = end_write - start_write;
-    std::cout << "Write Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
 
     // free(src_img);
     // fprintf(stderr, "free src_img\n");
     cudaFree(dst_img);
-    cudaFree(mod_src_img);
+    cudaFree(mod_src_img_h);
 
     auto end_all = std::chrono::high_resolution_clock::now();
-    elapsed_seconds = end_all - start_all;
+    elapsed_seconds = end_sobel - start_sobel;
     std::cout << "Total Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
 
     return 0;
