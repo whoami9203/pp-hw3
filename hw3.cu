@@ -213,10 +213,10 @@ int main(int argc, char** argv) {
 
     auto start_sobel = std::chrono::high_resolution_clock::now();
 
-    dim3 block_size(16, 16);
-    dim3 grid_size((width + 15) / 16, (height + 15) /16);
+    dim3 blockDim(16, 16);
+    dim3 gridDim((width + 15) / 16, (height + 15) /16);
 
-    sobel<<<block_size, grid_size>>>(texRef, dst_img, height, width, channels);
+    sobel<<<gridDim, blockDim>>>(texRef, dst_img, height, width, channels);
     cudaDeviceSynchronize();
 
     err = cudaGetLastError();
