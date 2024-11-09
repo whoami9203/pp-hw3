@@ -7,6 +7,9 @@
 #include <iostream>
 #include <chrono>
 
+#include <cuda_runtime.h>
+#include <cuda_texture_types.h>
+
 #define MASK_N 2
 #define MASK_X 5
 #define MASK_Y 5
@@ -109,16 +112,11 @@ __global__ void sobel(cudaTextureObject_t texRef, unsigned char* t, unsigned hei
     int x, y, v, u;
     int R, G, B;
     int val[MASK_N * 3] = {0};
-    int adjustX = 1;
-    int adjustY = 1;
-    int xBound = 2;
-    int yBound = 2;
     int total_pixel = width * height;
+    uchar4 pixel_val;
 
     int index = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = blockDim.x * gridDim.x;    
-
-    int pixel = 
 
     while(index < total_pixel){
         y = index / width;
@@ -131,19 +129,20 @@ __global__ void sobel(cudaTextureObject_t texRef, unsigned char* t, unsigned hei
         val[4] = 0;
         val[5] = 0;
         
-        for (v = -yBound; v < yBound + adjustY; ++v) {
-            for (u = -xBound; u < xBound + adjustX; ++u) {
-                R = tex1D<unsigned char>(texRef, channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 2);
-                G = tex1D<unsigned char>(texRef, channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 2);
-                B = tex1D<unsigned char>(texRef, channels * ((width+5) * (y+2 + v) + (x+2 + u)) + 2);
+        for (v = 0; v < 5; ++v) {
+            for (u = 0; u < 5; ++u) {
+                pixel_val = tex1D<uchar4>(texRef, (width+5) * (y + v) + (x + u));
+                R = pixel_val.z;
+                G = pixel_val.y;
+                B = pixel_val.x;
 
-                val[2] += R * mask[0][u + xBound][v + yBound];
-                val[1] += G * mask[0][u + xBound][v + yBound];
-                val[0] += B * mask[0][u + xBound][v + yBound];
+                val[2] += R * mask[0][u][v];
+                val[1] += G * mask[0][u][v];
+                val[0] += B * mask[0][u][v];
 
-                val[5] += R * mask[1][u + xBound][v + yBound];
-                val[4] += G * mask[1][u + xBound][v + yBound];
-                val[3] += B * mask[1][u + xBound][v + yBound];
+                val[5] += R * mask[1][u][v];
+                val[4] += G * mask[1][u][v];
+                val[3] += B * mask[1][u][v];
             }
         }
 
@@ -174,6 +173,7 @@ int main(int argc, char** argv) {
 
     auto start_all = std::chrono::high_resolution_clock::now();
 
+    cudaError_t err;
     int deviceId;
     int numberOfSMs;
 
@@ -192,40 +192,25 @@ int main(int argc, char** argv) {
     assert(channels == 3);
 
     unsigned char* dst_img;
-    cudaMallocManaged(&dst_img, height * width * channels * sizeof(unsigned char));
+    err = cudaMallocManaged(&dst_img, height * width * channels * sizeof(unsigned char));
+    fprintf(stderr, "dst_img error: %s\n", cudaGetErrorString(err));
 
     auto start_copy = std::chrono::high_resolution_clock::now();
 
-    unsigned char* mod_src_img_h = (unsigned char*)malloc((height + 5) * (width + 5) * channels * sizeof(unsigned char));
-    // cudaMallocManaged(&mod_src_img, (height+5) * (width+5) * channels * sizeof(unsigned char));
-
-    // memset(mod_src_img, 0, (height+5) * (width+5) * channels * sizeof(unsigned char));
-    for(int i=0; i<height+5; ++i){
-        if(i < 2 || i >= height + 2){
-            memset(mod_src_img_h, 0, (width+5) * channels);
-        }
-        else{
-            for(int j=0; j<3; ++j){
-                mod_src_img_h[channels * (i * (width+5) + 0) + j] = 0;
-                mod_src_img_h[channels * (i * (width+5) + 1) + j] = 0;
-                mod_src_img_h[channels * (i * (width+5) + width+2) + j] = 0;
-                mod_src_img_h[channels * (i * (width+5) + width+3) + j] = 0;
-                mod_src_img_h[channels * (i * (width+5) + width+4) + j] = 0;
-            }
-        }
-    }
+    uchar4* mod_src_img_uchar4 = (uchar4*)calloc((height + 5) * (width + 5), sizeof(uchar4));
 
     int num = width * channels * sizeof(unsigned char);
     for(int i=0; i<height; ++i){
-        memcpy(mod_src_img_h + channels * ((i+2) * (width+5) + 2), src_img + channels * i * width, num);
+        memcpy(mod_src_img_uchar4 + ((i+2) * (width+5) + 2), src_img + channels * i * width, num);
     }
 
-    cudaTextureObject_t texRef;
     cudaArray* cuArray;
-    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<unsigned char>();
-    cudaMallocArray(&cuArray, &channelDesc, (width+5) * (height+5) * channels);
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<uchar4>();
+    err = cudaMallocArray(&cuArray, &channelDesc, (width+5) * (height+5));
+    fprintf(stderr, "Malloc error: %s\n", cudaGetErrorString(err));
 
-    cudaMemcpyToArray(cuArray, 0, 0, mod_src_img_h, (width+5) * (height+5) * channels * sizeof(unsigned char), cudaMemcpyHostToDevice);
+    err = cudaMemcpyToArray(cuArray, 0, 0, mod_src_img_uchar4, (width+5) * (height+5) * sizeof(uchar4), cudaMemcpyHostToDevice);
+    fprintf(stderr, "Memcpy error: %s\n", cudaGetErrorString(err));
 
     cudaResourceDesc resDesc = {};
     resDesc.resType = cudaResourceTypeArray;
@@ -234,6 +219,7 @@ int main(int argc, char** argv) {
     cudaTextureDesc texDesc = {};
     texDesc.readMode = cudaReadModeElementType;
 
+    cudaTextureObject_t texRef;
     cudaCreateTextureObject(&texRef, &resDesc, &texDesc, NULL);
 
     // cudaMemPrefetchAsync(mod_src_img_h, (height+5) * (width+5) * channels * sizeof(unsigned char), deviceId);
@@ -246,6 +232,9 @@ int main(int argc, char** argv) {
     sobel<<<numberOfBlocks, threadsPerBlock>>>(texRef, dst_img, height, width, channels);
     cudaDeviceSynchronize();
 
+    err = cudaGetLastError();
+    fprintf(stderr, "CUDA error: %s\n", cudaGetErrorString(err));
+
     auto end_sobel = std::chrono::high_resolution_clock::now();
     elapsed_seconds = end_sobel - start_sobel;
     std::cout << "Sobel Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
@@ -257,7 +246,7 @@ int main(int argc, char** argv) {
     // free(src_img);
     // fprintf(stderr, "free src_img\n");
     cudaFree(dst_img);
-    cudaFree(mod_src_img_h);
+    cudaFree(mod_src_img_uchar4);
 
     auto end_all = std::chrono::high_resolution_clock::now();
     elapsed_seconds = end_sobel - start_sobel;
