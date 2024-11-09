@@ -112,23 +112,13 @@ __global__ void sobel(cudaTextureObject_t texRef, unsigned char* t, unsigned hei
     int x, y, v, u;
     int R, G, B;
     int val[MASK_N * 3] = {0};
-    int total_pixel = width * height;
     uchar4 pixel_val;
 
     int index = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;    
+    x = index % width;
+    y = index / width;
 
-    while(index < total_pixel){
-        y = index / width;
-        x = index % width;
-
-        val[0] = 0;
-        val[1] = 0;
-        val[2] = 0;
-        val[3] = 0;
-        val[4] = 0;
-        val[5] = 0;
-        
+    if(x < width && y < height){        
         for (v = 0; v < 5; ++v) {
             for (u = 0; u < 5; ++u) {
                 pixel_val = tex2D<uchar4>(texRef, (x + u), (y + v));
@@ -163,8 +153,6 @@ __global__ void sobel(cudaTextureObject_t texRef, unsigned char* t, unsigned hei
         t[channels * (width * y + x) + 2] = cR;
         t[channels * (width * y + x) + 1] = cG;
         t[channels * (width * y + x) + 0] = cB;
-
-        index += stride;
     }
 }
 
@@ -236,6 +224,8 @@ int main(int argc, char** argv) {
     std::cout << "Image Copy Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
 
     auto start_sobel = std::chrono::high_resolution_clock::now();
+
+    numberOfBlocks = (width*height + threadsPerBlock - 1) / threadsPerBlock;
     sobel<<<numberOfBlocks, threadsPerBlock>>>(texRef, dst_img, height, width, channels);
     cudaDeviceSynchronize();
 
