@@ -131,7 +131,7 @@ __global__ void sobel(cudaTextureObject_t texRef, unsigned char* t, unsigned hei
         
         for (v = 0; v < 5; ++v) {
             for (u = 0; u < 5; ++u) {
-                pixel_val = tex1D<uchar4>(texRef, (width+5) * (y + v) + (x + u));
+                pixel_val = tex2D<uchar4>(texRef, (x + u), (y + v));
                 R = pixel_val.z;
                 G = pixel_val.y;
                 B = pixel_val.x;
@@ -199,17 +199,20 @@ int main(int argc, char** argv) {
 
     uchar4* mod_src_img_uchar4 = (uchar4*)calloc((height + 5) * (width + 5), sizeof(uchar4));
 
-    int num = width * channels * sizeof(unsigned char);
+    int num = channels * sizeof(unsigned char);
     for(int i=0; i<height; ++i){
-        memcpy(mod_src_img_uchar4 + ((i+2) * (width+5) + 2), src_img + channels * i * width, num);
+        for(int j=0; j<width; ++j){
+            memcpy(mod_src_img_uchar4 + ((i+2) * (width+5) + (j+2)), (src_img + channels * (i * width + j)), num);
+        }
     }
 
     cudaArray* cuArray;
     cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<uchar4>();
-    err = cudaMallocArray(&cuArray, &channelDesc, (width+5) * (height+5));
+    err = cudaMallocArray(&cuArray, &channelDesc, (width+5), (height+5));
     fprintf(stderr, "Malloc error: %s\n", cudaGetErrorString(err));
 
-    err = cudaMemcpyToArray(cuArray, 0, 0, mod_src_img_uchar4, (width+5) * (height+5) * sizeof(uchar4), cudaMemcpyHostToDevice);
+    err = cudaMemcpy2DToArray(cuArray, 0, 0, mod_src_img_uchar4, (width+5) * sizeof(uchar4),
+                             (width+5) * sizeof(uchar4), (height+5), cudaMemcpyHostToDevice);
     fprintf(stderr, "Memcpy error: %s\n", cudaGetErrorString(err));
 
     cudaResourceDesc resDesc = {};
@@ -217,7 +220,11 @@ int main(int argc, char** argv) {
     resDesc.res.array.array = cuArray;
 
     cudaTextureDesc texDesc = {};
+    texDesc.addressMode[0] = cudaAddressModeBorder;
+    texDesc.addressMode[1] = cudaAddressModeBorder;
+    texDesc.filterMode = cudaFilterModePoint;
     texDesc.readMode = cudaReadModeElementType;
+    texDesc.normalizedCoords = 0;
 
     cudaTextureObject_t texRef;
     cudaCreateTextureObject(&texRef, &resDesc, &texDesc, NULL);
