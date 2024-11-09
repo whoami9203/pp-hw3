@@ -105,7 +105,7 @@ void write_png(const char* filename, png_bytep image, const unsigned height, con
 // cudaMemPrefetchAsync(a, size, deviceId);
 // cudaMemPrefetchAsync(c, size, cudaCpuDeviceId);
 
-__global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, unsigned channels, int TILE_WIDTH) {
+__global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, unsigned channels, int TILE_WIDTH, int numOfColumn) {
     
     extern __shared__ unsigned char sharedMem[];
     
@@ -115,8 +115,8 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
     int cur_mem_row = 0;
     int end_mem_row = 4;
 
-    int numOfRowChunk = 40;
-    int numOfColChunk = (width + 4804) / 4800;
+    int numOfRowChunk = (80 + numOfColumn - 1) / numOfColumn;
+    int numOfColChunk = numOfColumn;
     int rows_per_block = (height + numOfRowChunk - 1) / numOfRowChunk;
     int chunk_index = blockIdx.x % numOfColChunk;
 
@@ -271,13 +271,15 @@ int main(int argc, char** argv) {
 
     auto start_sobel = std::chrono::high_resolution_clock::now();
     
-    int numOfColumn = (width + 15 + 4800 - 1) / 4800;
+    int numOfColumn = (width + 5 + 3200 - 1) / 3200;
     int columnWidth = (width + (5 + 1)*numOfColumn - 1) / numOfColumn;
     int sharedMemSize = 5 * columnWidth * channels * sizeof(unsigned char);
+    fprintf(stderr, "width: %d, num of column: %d\n", width, numOfColumn);
     fprintf(stderr, "num of blocks: %d, column width: %d\n", numberOfBlocks, columnWidth);
     fprintf(stderr, "shared memory size: %d\n", sharedMemSize);
 
-    sobel<<<numberOfBlocks, threadsPerBlock, sharedMemSize>>>(mod_src_img, dst_img, height, width, channels, columnWidth);
+
+    sobel<<<numberOfBlocks, threadsPerBlock, sharedMemSize>>>(mod_src_img, dst_img, height, width, channels, columnWidth, numOfColumn);
     cudaDeviceSynchronize();
     err = cudaGetLastError();
     fprintf(stderr, "CUDA error: %s\n", cudaGetErrorString(err));
