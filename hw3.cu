@@ -107,21 +107,16 @@ void write_png(const char* filename, png_bytep image, const unsigned height, con
 
 __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, unsigned channels, int TILE_WIDTH) {
     
-    //extern __shared__ unsigned char sharedMem[];
-
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        printf("In kernel.\n");
-    }
-    return;
-    /*
+    extern __shared__ unsigned char sharedMem[];
+    
     int vv, uu, v, u, i;
     int R, G, B;
     int val[MASK_N * 3] = {0};
     int cur_mem_row = 0;
     int end_mem_row = 4;
 
-    int numOfRowChunk = (height + 1279) / 1280;
-    int numOfColChunk = (width + 6404) / 6400;
+    int numOfRowChunk = 40;
+    int numOfColChunk = (width + 4804) / 4800;
     int rows_per_block = (height + numOfRowChunk - 1) / numOfRowChunk;
     int chunk_index = blockIdx.x % numOfColChunk;
 
@@ -134,6 +129,14 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
     int len = end_column - start_column + 1;
     int stride = blockDim.x;
 
+    // if (threadIdx.x == 0 && blockIdx.x > 70){
+    //     printf("block ID: %d, start_row: %d, end_row: %d\n", blockIdx.x, start_row, end_row);
+    // }
+
+    // if (threadIdx.x == 0 && start_row > 3000){
+    //     printf("start_row: %d, end_row: %d\n", start_row, end_row);
+    // }
+
     if (start_row < end_row){
         for(i=threadIdx.x; i<len; i+=stride){
             for(int j=0; j<5; ++j){
@@ -145,10 +148,6 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
     }
 
     __syncthreads();      
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        printf("Shared Memory First Load: R=%d, G=%d, B=%d\n", 
-            sharedMem[0], sharedMem[1], sharedMem[2]);
-    }
 
     while(start_row < end_row){
         for(int index=threadIdx.x; index<len; index+=stride){
@@ -161,8 +160,8 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
 
             for (v = 0; v < 5; ++v) {
                 for (u = 0; u < 5; ++u) {
-                    vv = (v + cur_mem_row + index) % 5;
-                    uu = (u + cur_mem_row + index) % 5;
+                    vv = (v + cur_mem_row) % 5;
+                    uu = (u + index);
 
                     R = sharedMem[channels * ((TILE_WIDTH) * (vv) + (uu)) + 2];
                     G = sharedMem[channels * ((TILE_WIDTH) * (vv) + (uu)) + 1];
@@ -209,7 +208,7 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
 
             __syncthreads();
         }
-    } */
+    } 
 }
 
 int main(int argc, char** argv) {
@@ -227,7 +226,7 @@ int main(int argc, char** argv) {
     size_t threadsPerBlock;
     size_t numberOfBlocks;
     threadsPerBlock = 256;
-    numberOfBlocks = 32 * numberOfSMs;
+    numberOfBlocks = 2 * numberOfSMs;
 
     unsigned height, width, channels;
     unsigned char* src_img = NULL;
@@ -272,9 +271,10 @@ int main(int argc, char** argv) {
 
     auto start_sobel = std::chrono::high_resolution_clock::now();
     
-    int numOfColumn = (width + 5 + 6400 - 1) / 6400;
-    int columnWidth = (width + 5 + numOfColumn - 1) / numOfColumn;
+    int numOfColumn = (width + 15 + 4800 - 1) / 4800;
+    int columnWidth = (width + (5 + 1)*numOfColumn - 1) / numOfColumn;
     int sharedMemSize = 5 * columnWidth * channels * sizeof(unsigned char);
+    fprintf(stderr, "num of blocks: %d, column width: %d\n", numberOfBlocks, columnWidth);
     fprintf(stderr, "shared memory size: %d\n", sharedMemSize);
 
     sobel<<<numberOfBlocks, threadsPerBlock, sharedMemSize>>>(mod_src_img, dst_img, height, width, channels, columnWidth);
