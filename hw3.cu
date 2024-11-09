@@ -134,13 +134,9 @@ __global__ void sobel(cudaTextureObject_t texRef, unsigned char* t, unsigned hei
             }
         }
 
-        float totalR = 0.0;
-        float totalG = 0.0;
-        float totalB = 0.0;
-        
-        totalR += val[2] * val[2] + val[5] * val[5];
-        totalG += val[1] * val[1] + val[4] * val[4];
-        totalB += val[0] * val[0] + val[3] * val[3];
+        float totalR = val[2] * val[2] + val[5] * val[5];
+        float totalG = val[1] * val[1] + val[4] * val[4];
+        float totalB = val[0] * val[0] + val[3] * val[3];
 
         totalR = sqrt(totalR) / SCALE;
         totalG = sqrt(totalG) / SCALE;
@@ -157,21 +153,20 @@ __global__ void sobel(cudaTextureObject_t texRef, unsigned char* t, unsigned hei
 int main(int argc, char** argv) {
     assert(argc == 3);
 
-    auto start_all = std::chrono::high_resolution_clock::now();
-
     cudaError_t err;
-
     unsigned height, width, channels;
     unsigned char* src_img = NULL;
 
     read_png(argv[1], &src_img, &height, &width, &channels);
     assert(channels == 3);
 
-    unsigned char* dst_img;
-    err = cudaMallocManaged(&dst_img, height * width * channels * sizeof(unsigned char));
-    fprintf(stderr, "dst_img error: %s\n", cudaGetErrorString(err));
+    unsigned char* dst_img_h = (unsigned char*)malloc(height * width * channels * sizeof(unsigned char));
 
-    auto start_copy = std::chrono::high_resolution_clock::now();
+    unsigned char* dst_img_d;
+    err = cudaMalloc(&dst_img_d, height * width * channels * sizeof(unsigned char));
+    if(err != cudaSuccess){
+        fprintf(stderr, "dst_img error: %s\n", cudaGetErrorString(err));
+    }
 
     uchar4* mod_src_img_uchar4 = (uchar4*)calloc((height + 5) * (width + 5), sizeof(uchar4));
 
@@ -184,12 +179,10 @@ int main(int argc, char** argv) {
 
     cudaArray* cuArray;
     cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<uchar4>();
-    err = cudaMallocArray(&cuArray, &channelDesc, (width+5), (height+5));
-    fprintf(stderr, "Malloc error: %s\n", cudaGetErrorString(err));
+    cudaMallocArray(&cuArray, &channelDesc, (width+5), (height+5));
 
-    err = cudaMemcpy2DToArray(cuArray, 0, 0, mod_src_img_uchar4, (width+5) * sizeof(uchar4),
-                             (width+5) * sizeof(uchar4), (height+5), cudaMemcpyHostToDevice);
-    fprintf(stderr, "Memcpy error: %s\n", cudaGetErrorString(err));
+    cudaMemcpy2DToArray(cuArray, 0, 0, mod_src_img_uchar4, (width+5) * sizeof(uchar4),
+                         (width+5) * sizeof(uchar4), (height+5), cudaMemcpyHostToDevice);
 
     cudaResourceDesc resDesc = {};
     resDesc.resType = cudaResourceTypeArray;
@@ -207,37 +200,32 @@ int main(int argc, char** argv) {
 
     // cudaMemPrefetchAsync(mod_src_img_h, (height+5) * (width+5) * channels * sizeof(unsigned char), deviceId);
 
-    auto end_copy = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed_seconds = end_copy - start_copy;
-    std::cout << "Image Copy Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
-
-    auto start_sobel = std::chrono::high_resolution_clock::now();
-
     dim3 blockDim(16, 16);
     dim3 gridDim((width + 15) / 16, (height + 15) /16);
 
-    sobel<<<gridDim, blockDim>>>(texRef, dst_img, height, width, channels);
+    sobel<<<gridDim, blockDim>>>(texRef, dst_img_d, height, width, channels);
     cudaDeviceSynchronize();
 
     err = cudaGetLastError();
-    fprintf(stderr, "CUDA error: %s\n", cudaGetErrorString(err));
+    if (err != cudaSuccess){
+        fprintf(stderr, "CUDA error: %s\n", cudaGetErrorString(err));
+    }
 
-    auto end_sobel = std::chrono::high_resolution_clock::now();
-    elapsed_seconds = end_sobel - start_sobel;
-    std::cout << "Sobel Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
+    //cudaMemPrefetchAsync(dst_img_d, height * width * channels * sizeof(unsigned char), cudaCpuDeviceId);
+    err = cudaMemcpyAsync(dst_img_h, dst_img_d, height * width * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess){
+        fprintf(stderr, "Memcpy d_to_h error: %s\n", cudaGetErrorString(err));
+    }
 
-    cudaMemPrefetchAsync(dst_img, height * width * channels * sizeof(unsigned char), cudaCpuDeviceId);
+    cudaDestroyTextureObject(texRef);
+    cudaFreeArray(cuArray);
+    cudaFree(dst_img_d);
 
-    write_png(argv[2], dst_img, height, width, channels);
+    write_png(argv[2], dst_img_h, height, width, channels);
 
-    // free(src_img);
-    // fprintf(stderr, "free src_img\n");
-    cudaFree(dst_img);
-    cudaFree(mod_src_img_uchar4);
-
-    auto end_all = std::chrono::high_resolution_clock::now();
-    elapsed_seconds = end_sobel - start_sobel;
-    std::cout << "Total Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
+    free(src_img);
+    free(mod_src_img_uchar4);
+    free(dst_img_h);
 
     return 0;
 }
